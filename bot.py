@@ -772,6 +772,17 @@ async def bc_send_all(callback: types.CallbackQuery, state: FSMContext):
     await callback.message.answer(f"✅ Yakunlandi!\nQabul qildi: {count}\nXatolik: {err}")
     await state.clear()
 
+# Bu handler barcha boshqa handlerlarga tushmagan xabarlarni tutib oladi
+@dp.message()
+async def unknown_message(message: types.Message):
+    # Foydalanuvchiga xushmuomalalik bilan javob beramiz
+    await message.answer(
+        "🧐 <b>Tushunarsiz buyruq.</b>\n\n"
+        "Iltimos, bot xizmatlaridan foydalanish uchun pastdagi menyu tugmalaridan foydalaning yoki to'gri buyruq yuboring.",
+        reply_markup=main_menu, # Sening asosiy menyuing nomi
+        parse_mode="HTML"
+    )
+
 # --- BOTNI ISHGA TUSHIRISH ---
 async def main():
     # Baza faqat shu yerda, bot yoqilganda bir marta tekshiriladi
