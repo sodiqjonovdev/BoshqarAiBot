@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 
+from aiogram.filters import BaseFilter
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import (
@@ -65,8 +66,9 @@ cancel_menu = ReplyKeyboardMarkup(
 # --- Adminlar ---
 ADMIN = [int(os.getenv("ADMIN_ID"))]
 logging.Filter
-class IsAdmin(logging.Filter):
+class IsAdmin(BaseFilter): # logging.Filter emas, BaseFilter bo'lishi shart!
     async def __call__(self, message: types.Message) -> bool:
+        # ADMIN o'zgaruvchisi ro'yxat (list) ekanligiga ishonch hosil qil
         return message.from_user.id in ADMIN
 
 # --- Holatlar ---
@@ -660,7 +662,7 @@ async def list_users_paged(callback: types.CallbackQuery):
 
     text = "👤 <b>Foydalanuvchilar ro'yxati:</b>\n\n"
     for i, u in enumerate(users, offset + 1):
-        ch_count = await db.get_user_channel_count(u['user_id'])
+        ch_count = await db.get_user_channel_count(u.user_id) # Nuqta bilan!
         text += f"{i}. {u['first_name']} - {u['plan']} - 📢 {ch_count} ta\n"
 
     nav_btns = []
