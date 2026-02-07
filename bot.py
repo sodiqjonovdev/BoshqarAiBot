@@ -663,7 +663,7 @@ async def list_users_paged(callback: types.CallbackQuery):
     text = "👤 <b>Foydalanuvchilar ro'yxati:</b>\n\n"
     for i, u in enumerate(users, offset + 1):
         ch_count = await db.get_user_channel_count(u.user_id) # Nuqta bilan!
-        text += f"{i}. {u['first_name']} - {u['plan']} - 📢 {ch_count} ta\n"
+        text += f"{i}. {u.first_name} - {u.plan} - 📢 {ch_count} ta\n"
 
     nav_btns = []
     if page > 0:
