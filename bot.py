@@ -185,7 +185,7 @@ async def cmd_start(message: types.Message, state: FSMContext):
         )
         await state.set_state(Form.waiting_for_name)
     else:
-        await message.answer(f"Xush kelibsiz, {user['first_name']}!", reply_markup=main_menu)
+        await message.answer(f"Xush kelibsiz, {user.first_name}!", reply_markup=main_menu)
 
 @dp.message(Form.waiting_for_name)
 async def process_name(message: types.Message, state: FSMContext):
@@ -520,10 +520,10 @@ async def btn_profile(message: types.Message):
     # Faqat shu foydalanuvchining kanallarini olamiz
     user_channels = await db.get_user_channels(message.from_user.id)
     
-    first_name = user['first_name'] if user else "Kiritilmagan"
-    last_name = user['last_name'] if user else "Kiritilmagan"
-    phone = user['phone'] if user else "Kiritilmagan"
-    plan = user['plan'] if user else "Free"
+    first_name = user.first_name if user else "Kiritilmagan"
+    last_name = user.last_name if user else "Kiritilmagan"
+    phone = user.phone if user else "Kiritilmagan"
+    plan = user.plan if user else "Free"
     
     text = (
         f"<b>👤 Profilingiz</b>\n\n"
