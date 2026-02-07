@@ -1,200 +1,241 @@
-import aiosqlite
+import os
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta
+from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession, async_sessionmaker
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy import BigInteger, String, Integer, DateTime, Boolean, select, func, text, desc
+from sqlalchemy.exc import IntegrityError
 
-# Bitta markaziy baza nomi
-DB_NAME = "boshqar_ai.db"
+# --- CONFIG ---
+# Railway yoki .env dan URL ni olamiz
+DB_URL = os.getenv("DATABASE_URL")
+
+# Railway 'postgres://' beradi, lekin SQLAlchemy ga 'postgresql+asyncpg://' kerak
+if DB_URL and DB_URL.startswith("postgres://"):
+    DB_URL = DB_URL.replace("postgres://", "postgresql+asyncpg://", 1)
+
+if not DB_URL:
+    raise ValueError("❌ DATABASE_URL topilmadi! .env faylni yoki Railway Variablesni tekshiring.")
+
+# Engine va Session yaratish
+engine = create_async_engine(DB_URL, echo=False)
+async_session = async_sessionmaker(engine, expire_on_commit=False, class_=AsyncSession)
+
+# Asosiy Model Class
+class Base(DeclarativeBase):
+    pass
+
+# --- JADVALLAR (MODELS) ---
+
+class User(Base):
+    __tablename__ = "users"
+    
+    # Telegram ID lar katta bo'ladi, shuning uchun BigInteger
+    user_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    first_name: Mapped[str] = mapped_column(String, nullable=True)
+    last_name: Mapped[str] = mapped_column(String, nullable=True)
+    phone: Mapped[str] = mapped_column(String, nullable=True)
+    username: Mapped[str] = mapped_column(String, nullable=True)
+    plan: Mapped[str] = mapped_column(String, default="Free")
+    is_banned: Mapped[bool] = mapped_column(Boolean, default=False)
+    ban_until: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+class Channel(Base):
+    __tablename__ = "channels"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger)
+    channel_id: Mapped[str] = mapped_column(String)
+    joined_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+    
+    # Unique constraint (User bitta kanalni 2 marta qo'sha olmasligi uchun)
+    # SQLAlchemy da buni __table_args__ bilan qilish mumkin, lekin oddiylik uchun
+    # pastda add_channel funksiyasida tekshiramiz.
+
+class AIRequest(Base):
+    __tablename__ = "ai_requests"
+    
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    user_id: Mapped[int] = mapped_column(BigInteger)
+    topic: Mapped[str] = mapped_column(String)
+    request_at: Mapped[datetime] = mapped_column(DateTime, default=func.now())
+
+# --- INIT ---
 
 async def init_db():
-    """Ma'lumotlar bazasini va barcha jadvallarni yaratish."""
-    async with aiosqlite.connect(DB_NAME) as db:
-        # 1. Foydalanuvchilar jadvali
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                first_name TEXT,
-                last_name TEXT,
-                phone TEXT,
-                username TEXT,
-                plan TEXT DEFAULT 'Free',
-                is_banned INTEGER DEFAULT 0,
-                ban_until TIMESTAMP,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        # 2. Kanallar jadvali
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS channels (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                channel_id TEXT,
-                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(user_id, channel_id) 
-            )
-        """)
-        
-        # 3. AI Requestlar jadvali (Topic loglari)
-        await db.execute("""
-            CREATE TABLE IF NOT EXISTS ai_requests (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                topic TEXT,
-                request_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
-        
-        await db.commit()
-        logging.info("✅ Baza modernizatsiya qilindi va barcha jadvallar tayyor.")
+    """Jadvallarni yaratish"""
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    logging.info("✅ PostgreSQL jadvallari tayyorlandi.")
 
 # --- FOYDALANUVCHI AMALLARI ---
 
 async def save_user(data):
-    """Yangi foydalanuvchini saqlash yoki yangilash"""
-    async with aiosqlite.connect(DB_NAME) as db:
-        await db.execute(
-            """INSERT INTO users (user_id, first_name, last_name, phone, username, plan) 
-               VALUES (?, ?, ?, ?, ?, ?)
-               ON CONFLICT(user_id) DO UPDATE SET 
-               first_name=excluded.first_name, last_name=excluded.last_name, 
-               username=excluded.username, phone=excluded.phone""",
-            (data['user_id'], data['first_name'], data['last_name'], data['phone'], data['username'], data.get('plan', 'Free'))
-        )
-        await db.commit()
+    """Userni saqlash yoki yangilash (Upsert)"""
+    async with async_session() as session:
+        # Avval user borligini tekshiramiz
+        result = await session.execute(select(User).where(User.user_id == data['user_id']))
+        user = result.scalar_one_or_none()
+
+        if user:
+            # Update (Yangilash)
+            user.first_name = data.get('first_name', user.first_name)
+            user.last_name = data.get('last_name', user.last_name)
+            user.username = data.get('username', user.username)
+            user.phone = data.get('phone', user.phone)
+        else:
+            # Insert (Yangi qo'shish)
+            user = User(
+                user_id=data['user_id'],
+                first_name=data.get('first_name'),
+                last_name=data.get('last_name'),
+                username=data.get('username'),
+                phone=data.get('phone'),
+                plan=data.get('plan', 'Free')
+            )
+            session.add(user)
+        
+        await session.commit()
 
 async def get_user(user_id):
-    async with aiosqlite.connect(DB_NAME) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM users WHERE user_id = ?", (user_id,)) as cursor:
-            return await cursor.fetchone()
+    async with async_session() as session:
+        result = await session.execute(select(User).where(User.user_id == user_id))
+        user = result.scalar_one_or_none()
+        # Moslik uchun dict ko'rinishida yoki obyekt qaytarish mumkin. 
+        # Hozirgi kodingiz ishlashi uchun obyektni o'zi qaytadi, 
+        # lekin atributlarga nuqta bilan murojaat qilasiz (user.is_banned).
+        return user
 
-# --- ADMIN STATISTIKA AMALLARI (YANGILANGAN) ---
+# --- ADMIN STATISTIKA ---
 
 async def get_admin_dashboard_stats():
-    """Dashboard uchun barcha statistikalar"""
-    async with aiosqlite.connect(DB_NAME) as db:
-        db.row_factory = aiosqlite.Row
+    async with async_session() as session:
         stats = {}
         
-        # 1. Userlar statistikasi
-        async with db.execute("SELECT COUNT(*) as total FROM users") as c:
-            stats['total_users'] = (await c.fetchone())['total']
-            
-        async with db.execute("SELECT COUNT(*) as monthly FROM users WHERE created_at >= date('now', 'start of month')") as c:
-            stats['monthly_users'] = (await c.fetchone())['monthly']
-            
-        # 2. AI Requestlar statistikasi
-        async with db.execute("SELECT COUNT(*) as total FROM ai_requests") as c:
-            stats['total_ai'] = (await c.fetchone())['total']
-            
-        async with db.execute("SELECT COUNT(*) as monthly FROM ai_requests WHERE request_at >= date('now', 'start of month')") as c:
-            stats['monthly_ai'] = (await c.fetchone())['monthly']
-            
-        # 3. Trendlar (Oxirgi 30 kun ichidagi eng mashhur 5 ta mavzu)
-        # BU YERDA 'request_at' orqali vaqt filtrlanadi
-        async with db.execute("""
-            SELECT topic, COUNT(topic) as cnt 
-            FROM ai_requests 
-            WHERE request_at >= datetime('now', '-30 days')
-            GROUP BY topic 
-            ORDER BY cnt DESC 
-            LIMIT 5
-        """) as c:
-            stats['trends'] = await c.fetchall()
-            
-        # 4. Kanallar statistikasi
-        async with db.execute("SELECT COUNT(*) as total FROM channels") as c:
-            stats['total_channels'] = (await c.fetchone())['total']
-            
-        async with db.execute("SELECT COUNT(*) as monthly FROM channels WHERE joined_at >= date('now', 'start of month')") as c:
-            stats['monthly_channels'] = (await c.fetchone())['monthly']
-            
+        # 1. Userlar soni
+        stats['total_users'] = await session.scalar(select(func.count(User.user_id)))
+        
+        # Oylik userlar
+        start_of_month = datetime.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        stats['monthly_users'] = await session.scalar(
+            select(func.count(User.user_id)).where(User.created_at >= start_of_month)
+        )
+        
+        # 2. AI Requestlar
+        stats['total_ai'] = await session.scalar(select(func.count(AIRequest.id)))
+        stats['monthly_ai'] = await session.scalar(
+            select(func.count(AIRequest.id)).where(AIRequest.request_at >= start_of_month)
+        )
+        
+        # 3. Trendlar (Oxirgi 30 kun)
+        thirty_days_ago = datetime.now() - timedelta(days=30)
+        
+        # Murakkab so'rov: Mavzularni sanash va kamayish tartibida saralash
+        query = (
+            select(AIRequest.topic, func.count(AIRequest.topic).label('cnt'))
+            .where(AIRequest.request_at >= thirty_days_ago)
+            .group_by(AIRequest.topic)
+            .order_by(desc('cnt'))
+            .limit(5)
+        )
+        result = await session.execute(query)
+        stats['trends'] = result.all() # [(Mavzu, Soni), ...] qaytaradi
+        
+        # 4. Kanallar
+        stats['total_channels'] = await session.scalar(select(func.count(Channel.id)))
+        stats['monthly_channels'] = await session.scalar(
+            select(func.count(Channel.id)).where(Channel.joined_at >= start_of_month)
+        )
+        
         return stats
 
 # --- AI LOGLASH ---
 
 async def log_ai_request(user_id, topic):
-    """Har bir post so'rovini bazaga yozib boradi"""
-    async with aiosqlite.connect(DB_NAME) as db:
-        # request_at avtomatik hozirgi vaqtni oladi
-        await db.execute("INSERT INTO ai_requests (user_id, topic) VALUES (?, ?)", (user_id, topic))
-        await db.commit()
+    async with async_session() as session:
+        req = AIRequest(user_id=user_id, topic=topic)
+        session.add(req)
+        await session.commit()
 
-# --- BAN TIZIMI (DEBUG QILINGAN) ---
+# --- BAN TIZIMI ---
 
 async def set_user_ban_status(user_id, status: bool, hours: int = 0):
-    """Userni bloklash (ma'lum soatga) yoki ochish"""
-    async with aiosqlite.connect(DB_NAME) as db:
-        if status:
-            # Soatni qo'shib, 'localtime' da saqlaymiz
-            await db.execute(
-                f"UPDATE users SET is_banned = 1, ban_until = datetime('now', 'localtime', '+{hours} hours') WHERE user_id = ?",
-                (user_id,)
-            )
-        else:
-            await db.execute("UPDATE users SET is_banned = 0, ban_until = NULL WHERE user_id = ?", (user_id,))
-        await db.commit()
+    async with async_session() as session:
+        result = await session.execute(select(User).where(User.user_id == user_id))
+        user = result.scalar_one_or_none()
+        
+        if user:
+            if status:
+                user.is_banned = True
+                user.ban_until = datetime.now() + timedelta(hours=hours)
+            else:
+                user.is_banned = False
+                user.ban_until = None
+            await session.commit()
 
 async def get_ban_info(user_id):
-    """Ban holatini tekshirish: Agar ban muddati o'tgan bo'lsa avtomatik ochadi"""
-    async with aiosqlite.connect(DB_NAME) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT is_banned, ban_until FROM users WHERE user_id = ?", (user_id,)) as cursor:
-            row = await cursor.fetchone()
-            if not row: return None
-            
-            if row['is_banned'] == 1:
-                # Ban muddati tugaganini tekshirish
-                if row['ban_until']:
-                    now = datetime.now()
-                    try:
-                        # SQLite dan keladigan vaqt formati: '2023-10-25 14:30:00'
-                        ban_time = datetime.strptime(row['ban_until'], '%Y-%m-%d %H:%M:%S')
-                        
-                        if now > ban_time:
-                            # Muddat o'tgan bo'lsa, ban'dan ochamiz
-                            await set_user_ban_status(user_id, False)
-                            return None
-                        else:
-                            return row['ban_until'] # Ban vaqti qaytadi
-                    except ValueError:
-                        # Agar vaqt formati buzilgan bo'lsa, banni ochib yuboramiz (xavfsizlik uchun)
-                        await set_user_ban_status(user_id, False)
-                        return None
+    async with async_session() as session:
+        result = await session.execute(select(User).where(User.user_id == user_id))
+        user = result.scalar_one_or_none()
+        
+        if not user:
             return None
+        
+        if user.is_banned:
+            if user.ban_until:
+                # Muddat o'tganligini tekshirish
+                if datetime.now() > user.ban_until:
+                    user.is_banned = False
+                    user.ban_until = None
+                    await session.commit()
+                    return None
+                return user.ban_until
+            # Agar ban bor lekin vaqt belgilanmagan bo'lsa (permaban)
+            return True 
+            
+        return None
 
-# --- USER LIST VA KANAL AMALLARI ---
+# --- LIST VA KANALLAR ---
 
 async def get_users_list(limit=10, offset=0):
-    async with aiosqlite.connect(DB_NAME) as db:
-        db.row_factory = aiosqlite.Row
-        async with db.execute("SELECT * FROM users LIMIT ? OFFSET ?", (limit, offset)) as cursor:
-            return await cursor.fetchall()
+    async with async_session() as session:
+        result = await session.execute(select(User).limit(limit).offset(offset))
+        return result.scalars().all()
 
 async def get_user_channel_count(user_id):
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT COUNT(*) FROM channels WHERE user_id = ?", (user_id,)) as cursor:
-            row = await cursor.fetchone()
-            return row[0] if row else 0
+    async with async_session() as session:
+        count = await session.scalar(
+            select(func.count(Channel.id)).where(Channel.user_id == user_id)
+        )
+        return count or 0
 
 async def add_channel(user_id, channel_id):
-    async with aiosqlite.connect(DB_NAME) as db:
+    async with async_session() as session:
+        # Avval bu userda bu kanal borligini tekshiramiz
+        existing = await session.scalar(
+            select(Channel).where(
+                (Channel.user_id == user_id) & (Channel.channel_id == str(channel_id))
+            )
+        )
+        if existing:
+            return False # Kanal allaqachon bor
+            
         try:
-            await db.execute("INSERT INTO channels (user_id, channel_id) VALUES (?, ?)", (user_id, str(channel_id)))
-            await db.commit()
+            new_ch = Channel(user_id=user_id, channel_id=str(channel_id))
+            session.add(new_ch)
+            await session.commit()
             return True
-        except: 
+        except Exception as e:
+            logging.error(f"Kanal qo'shishda xatolik: {e}")
             return False
 
 async def get_user_channels(user_id):
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT channel_id FROM channels WHERE user_id = ?", (user_id,)) as cursor:
-            rows = await cursor.fetchall()
-            return [row[0] for row in rows]
+    async with async_session() as session:
+        result = await session.execute(select(Channel.channel_id).where(Channel.user_id == user_id))
+        return result.scalars().all()
 
 async def get_all_user_ids():
-    """Broadcast uchun barcha user ID larini olish"""
-    async with aiosqlite.connect(DB_NAME) as db:
-        async with db.execute("SELECT user_id FROM users") as cursor:
-            rows = await cursor.fetchall()
-            return [row[0] for row in rows]
+    async with async_session() as session:
+        result = await session.execute(select(User.user_id))
+        return result.scalars().all()
