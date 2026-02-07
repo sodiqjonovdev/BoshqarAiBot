@@ -628,7 +628,8 @@ async def show_stats(callback: types.CallbackQuery):
     s = await db.get_admin_dashboard_stats()
     
     # Trendlarni chiroyli formatlash
-    trends_text = "\n".join([f"🔥 {t['topic']} ({t['cnt']} ta)" for t in s['trends']]) or "Hozircha yo'q"
+    # t[0] - bu topic (mavzu), t[1] - bu count (soni)
+    trends_text = "\n".join([f"🔥 {t[0]} ({t[1]} ta)" for t in s['trends']]) or "Hozircha yo'q"
     
     text = (f"📊 <b>Umumiy statistika:</b>\n\n"
             f"👤 <b>Userlar:</b>\n"

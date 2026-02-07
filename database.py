@@ -220,3 +220,14 @@ async def get_all_user_ids():
     async with async_session() as session:
         result = await session.execute(select(User.user_id))
         return result.scalars().all()
+
+async def update_user_field(user_id: int, field: str, value):
+    """Foydalanuvchining ma'lum bir maydonini yangilash"""
+    async with async_session() as session:
+        result = await session.execute(select(User).where(User.user_id == user_id))
+        user = result.scalar_one_or_none()
+        if user:
+            setattr(user, field, value)
+            await session.commit()
+            return True
+        return False
