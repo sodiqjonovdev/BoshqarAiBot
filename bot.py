@@ -572,21 +572,27 @@ async def back_to_profile_handler(callback: types.CallbackQuery, state: FSMConte
 
 @dp.message(Form.editing_name)
 async def update_name(message: types.Message, state: FSMContext):
-    if message.text != "🔙 Bekor qilish":
+    if message.text == "🔙 Bekor qilish":
+        await message.answer("❌ O'zgartirish bekor qilindi.", reply_markup=main_menu)
+    else:
         await db.update_user_field(message.from_user.id, "first_name", message.text)
         await message.answer("✅ Ism o'zgardi!", reply_markup=main_menu)
     await state.clear()
 
 @dp.message(Form.editing_surname)
 async def update_surname(message: types.Message, state: FSMContext):
-    if message.text != "🔙 Bekor qilish":
+    if message.text == "🔙 Bekor qilish":
+        await message.answer("❌ O'zgartirish bekor qilindi.", reply_markup=main_menu)
+    else:
         await db.update_user_field(message.from_user.id, "last_name", message.text)
         await message.answer("✅ Familiya o'zgardi!", reply_markup=main_menu)
     await state.clear()
 
 @dp.message(Form.editing_phone, F.contact | F.text)
 async def update_phone(message: types.Message, state: FSMContext):
-    if message.text != "🔙 Bekor qilish":
+    if message.text == "🔙 Bekor qilish":
+        await message.answer("❌ O'zgartirish bekor qilindi.", reply_markup=main_menu)
+    else:
         new_phone = message.contact.phone_number if message.contact else message.text
         await db.update_user_field(message.from_user.id, "phone", new_phone)
         await message.answer(f"✅ Tel yangilandi: {new_phone}", reply_markup=main_menu)
